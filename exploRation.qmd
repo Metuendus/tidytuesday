@@ -1,0 +1,28 @@
+---
+title: "ExploRation"
+author: "José Carlos Corona"
+format: html
+---
+```{r}
+if (!require("pacman")) install.packages("pacman") 
+pacman::p_load(
+  janitor,
+  ggthemes,
+  ggtext,
+  tidytuesdayR,
+  tidyverse
+)
+```
+
+```{r}
+data <- tt_load(last_tuesday(date = Sys.Date()))
+
+global_temps <- data$global_temps %>% 
+  rename_all(make_clean_names)
+nh_temps <- data$nh_temps %>% 
+  rename_all(make_clean_names)
+sh_temps <- data$sh_temps %>% 
+  rename_all(make_clean_names)
+zonann_temps <- data$zonann_temps %>% 
+  rename_all(make_clean_names)
+```

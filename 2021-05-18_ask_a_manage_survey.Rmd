@@ -1,0 +1,208 @@
+---
+title: "ask a manager survey"
+date: 2022-08-02
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(tidytuesdayR)
+library(scales)
+library(lubridate)
+library(broom)
+library(tidymodels)
+theme_set(theme_light())
+```
+
+# Load the weekly Data
+
+Download the weekly data and make available in the `tt` object.
+
+```{r Load}
+
+tt <- tt_load("2021-05-18")
+
+survey <- tt$survey %>% 
+  mutate(timestamp =  mdy_hms(timestamp),
+         age_category = fct_relevel(fct_reorder(how_old_are_you,
+                                                parse_number(how_old_are_you)),
+                                    "under 18"),
+         experience_overall = str_replace(overall_years_of_professional_experience, " - ", "-"),
+         experience_overall = fct_reorder(experience_overall,
+                                          parse_number(experience_overall)),
+         experience_in_field = str_replace(years_of_experience_in_field, " - ", "-"),
+         experience_in_field = fct_reorder(experience_in_field,
+                                           parse_number(experience_in_field))) %>% 
+  mutate(gender = fct_collapse(gender, "Other or prefer not to answer" = c("Other or prefer not to answer", "Prefer not to answer")),
+         race = fct_lump(coalesce(race, "Other"), 4))
+
+survey %>% 
+  count(age_category)
+
+survey %>% 
+  count(industry, sort = TRUE)
+
+survey %>% 
+  count(job_title, sort = TRUE)
+
+survey %>% 
+  count(currency)
+```
+
+```{r}
+
+survery_usd <- survey %>% 
+  filter(currency == "USD") %>% 
+  filter(annual_salary >= 5000,
+         annual_salary <= 2e6) %>% 
+  mutate(state = str_remove(state, ", .*"))
+
+
+survery_usd %>% 
+  ggplot(aes(annual_salary)) +
+  geom_histogram() +
+  scale_x_log10(labels = dollar_format()) +
+  labs(x = "Annual")
+
+summarize_salary <- function(tbl) {
+  tbl %>% 
+    summarise(n = n(),
+              median_salary = median(annual_salary)) %>% 
+    arrange(desc(n))
+}
+
+plot_categorical <- function(tbl, column, n_levels = 9, reorder = TRUE) {
+  lumped_tbl <- tbl %>% 
+    filter(!is.na({{ column }})) %>% 
+    mutate({{ column }} := fct_lump({{ column }}, n_levels))
+  
+  if (reorder) {
+    lumped_tbl <- lumped_tbl %>% 
+      mutate({{ column }} := fct_reorder({{ column }}, annual_salary))
+  }
+  lumped_tbl %>% 
+    group_by({{ column }}) %>% 
+    summarize_salary() %>% 
+    ggplot(aes(median_salary, {{ column }})) +
+    geom_col() +
+    scale_x_continuous(labels = dollar_format()) +
+    labs(x = "Median salary")
+}
+
+survery_usd %>% 
+  plot_categorical(state)
+
+survery_usd %>% 
+  plot_categorical(industry)
+
+survery_usd %>% 
+  plot_categorical(job_title, n_levels = 15)
+
+survery_usd %>% 
+  plot_categorical(experience_overall, reorder = FALSE)
+
+survery_usd %>% 
+  plot_categorical(experience_in_field, reorder = FALSE)
+
+survery_usd %>% 
+  plot_categorical(gender)
+
+survery_usd %>% 
+  plot_categorical(race, n_levels = 4)
+
+survery_usd %>% 
+  plot_categorical(age_category, reorder = FALSE)
+
+```
+
+### ANOVA
+```{r}
+survery_usd %>% 
+  filter(!is.na(experience_overall)) %>% 
+  ggplot(aes(annual_salary, experience_overall)) +
+  geom_boxplot() +
+  scale_x_log10()
+
+lm(log2(annual_salary) ~ experience_overall, data = survery_usd) %>% 
+  summary()
+lm(log2(annual_salary) ~ experience_in_field, data = survery_usd) %>% 
+  summary()
+
+survery_usd %>% 
+  mutate(job_title = fct_lump(job_title, 20)) %>% 
+  lm(log2(annual_salary) ~ job_title, data = .) %>% 
+  summary()
+
+survery_usd %>% 
+  mutate(job_title = fct_lump(job_title, 10),
+         state = fct_lump(state, 10),
+         industry = fct_lump(industry, 10)) %>% 
+  lm(log2(annual_salary) ~ job_title + state + experience_in_field + gender + race + industry, data = .) %>% 
+  anova() %>% 
+  tidy() %>% 
+  mutate(pct_variation = sumsq / sum(sumsq)) %>% 
+  arrange(desc(pct_variation))
+  
+
+```
+
+
+
+```{r}
+survery_usd %>% 
+  count(experience_overall, sort = TRUE)
+
+survery_usd %>% 
+  count(experience_in_field)
+
+```
+
+### Machine Learning
+```{r}
+set.seed(2021)
+survey_usd_split <- initial_split(survery_usd)
+
+survey_usd_training <- training(survey_usd_split)
+survey_usd_testing <- testing(survey_usd_split)
+
+rec <- survey_usd_training %>% 
+recipe(annual_salary ~ job_title + state + experience_in_field + gender + race + industry + highest_level_of_education_completed) %>% 
+  step_unknown(job_title, state, experience_in_field, gender, race, industry, highest_level_of_education_completed) %>% 
+  step_mutate(highest_level_of_education_completed = factor(highest_level_of_education_completed)) %>% 
+  step_log(annual_salary, base = 2) %>% 
+  step_other(job_title, industry, state, threshold = tune()) %>%
+  step_dummy(all_nominal())
+
+training_prepared <- bake(rec, new_data = survey_usd_training)
+```
+
+```{r}
+training_cv <- vfold_cv(survey_usd_training)
+
+threshold_grid <- crossing(threshold = c(.001, .003, .01, .03, .1))
+
+linear_model_cv_tune_threshold <-linear_reg() %>% 
+  set_engine("lm") %>% 
+  tune_grid(rec, training_cv,  grid = threshold_grid)
+
+linear_model_cv <-linear_reg() %>% 
+  set_engine("lm") %>% 
+  fit_resamples(rec, training_cv)
+
+
+linear_model_cv %>% 
+  collect_metrics()
+```
+
+```{r}
+
+linear_model_cv %>% 
+  collect_metrics()
+```
+

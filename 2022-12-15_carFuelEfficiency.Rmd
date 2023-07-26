@@ -1,0 +1,59 @@
+---
+title: "2022-12-15_carFuelEfficiency"
+output: html_notebook
+---
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+theme_set(theme_light())
+```
+
+```{r}
+big_epa_cars <- readr::read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-10-15/big_epa_cars.csv")
+```
+
+```{r}
+cars <- big_epa_cars %>% 
+  select(id, VClass, make, model, year, phevBlended, trany, cylinders, city08, comb08, highway08) %>% 
+  mutate(year = as.factor(year))
+```
+
+```{r}
+cars %>% 
+  count(VClass, sort = TRUE)
+
+cars %>% 
+  count(make, sort = TRUE)
+
+cars %>% 
+  count(model, sort = TRUE)
+
+cars %>% 
+  count(year, sort = TRUE)
+
+cars %>% 
+  count(trany, sort = TRUE)
+
+cars %>% 
+  count(cylinders, sort = TRUE)
+```
+
+```{r}
+compare_graph <- function(data, dim, n=10) {
+  data %>% 
+  mutate(dim = fct_lump({{dim}}, n)) %>% 
+  ggplot(aes(city08, highway08)) +
+  geom_point() +
+  facet_wrap(~{{dim}})
+}
+```
+
+```{r}
+cars %>% 
+compare_graph(make, n = 5)
+```
+
